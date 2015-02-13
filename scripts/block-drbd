@@ -55,6 +55,46 @@
 
 dir=$(dirname "$0")
 . "$dir/block-common.sh"
+drbd_resource=
+
+##
+# get drbd resource name by device
+#
+# Params:
+#   $1 dev: device path
+# return:
+#   drbd resource name
+#
+function get_res_name()
+{
+    local drbd_dev=$1
+    local drbd_dev_list=($(drbdadm sh-dev all))
+    local drbd_res_list=($(drbdadm sh-resource all))
+    local temp_drbd_dev temp_drbd_res
+    local found=0
+
+    for temp_drbd_dev in ${drbd_dev_list[@]}; do
+        if [[ "$temp_drbd_dev" == "$drbd_dev" ]]; then
+            found=1
+            break
+        fi
+    done
+
+    if [[ $found -eq 0 ]]; then
+        return 1
+    fi
+
+    for temp_drbd_res in ${drbd_res_list[@]}; do
+        temp_drbd_dev=$(drbdadm sh-dev $temp_drbd_res)
+        if [[ "$temp_drbd_dev" == "$drbd_dev" ]]; then
+            drbd_resource="$temp_drbd_res"
+            return 0
+        fi
+    done
+
+    # OOPS
+    return 2
+}
 
 ##
 # canonicalise_mode mode
@@ -231,6 +271,13 @@ and so cannot be mounted ${m2}${when}."
 
 t=$(xenstore_read_default "$XENBUS_PATH/type" 'MISSING')
 
+p=$(xenstore_read "$XENBUS_PATH/params")
+get_res_name $p
+rc=$?
+if [[ $rc -ne 0 ]]; then
+    exit $rc
+fi
+
 case "$command" in
   add)
     phys=$(xenstore_read_default "$XENBUS_PATH/physical-device" 'MISSING')
@@ -243,13 +290,11 @@ case "$command" in
 
     if [ -n "$t" ]
     then
-      p=$(xenstore_read "$XENBUS_PATH/params")
       mode=$(xenstore_read "$XENBUS_PATH/mode")
     fi
 
     case $t in 
-      drbd)
-        drbd_resource=$p
+      phy)
         drbd_role="$(/sbin/drbdadm role $drbd_resource)"
         drbd_lrole="${drbd_role%%/*}"
         drbd_dev="$(/sbin/drbdadm sh-dev $drbd_resource)"
@@ -276,9 +321,7 @@ case "$command" in
 
   remove)
     case $t in 
-      drbd)
-        p=$(xenstore_read "$XENBUS_PATH/params")
-        drbd_resource=$p
+      phy)
         drbd_role="$(/sbin/drbdadm role $drbd_resource)"
         drbd_lrole="${drbd_role%%/*}"
         drbd_dev="$(/sbin/drbdadm sh-dev $drbd_resource)"
